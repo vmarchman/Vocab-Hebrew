@@ -1,0 +1,382 @@
+---
+title: "Hebrew CDI Longitudinal Growth"
+output: html_document
+date: '2022-08-23; updated 2022-10-5; submitted 2024-05-21'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load libraries
+```{r}
+
+library(tidyverse)
+library(effsize)
+library(stargazer)
+library(psych)
+library(reghelper)
+library(lme4)
+library(lmerTest)
+library(dplyr)
+library(ggplot2)
+library(sjPlot) #for plotting lmer and glmer mods
+library(effects)
+library(sjmisc)
+library(sjstats) #use for r2 functions
+library(gamlss)
+
+```
+#Load data.frame
+```{r}
+
+setwd("G:/Shared drives/Lang Learning Lab Management/Staff Personal/Active Staff Personal/VMarchman/mypapers/HebrewCDI/Growth Paper")
+
+Hebgrowth <- read.csv("HebGrowth_data.csv", header = TRUE) %>%
+    mutate(LTgroup = case_when(
+              LTgroup == 0 ~ "TD",
+              LTgroup == 1 ~ "LT"),
+           Sex = case_when(
+             Sex == "1" ~ "M",
+             Sex == "2" ~ "F"))
+           
+Hebgrowth$LTgroup <- factor(Hebgrowth$LTgroup, levels = c("TD", "LT"))
+
+Hebgrowth$Sex <- factor(Hebgrowth$Sex, levels = c("M", "F"))
+
+
+Hebgrowth$adm <- factor(Hebgrowth$adm, levels = c("1", "2", "3"))
+         
+
+# Check data
+
+Hebgrowth %>% 
+  count(LTgroup)
+
+Hebgrowth %>% group_by(adm, Sex, LTgroup) %>%
+  count(age1)
+
+Hebgrowth %>% group_by(adm, Sex) %>%
+  count(AGE)
+
+Hebgrowth %>% group_by(adm) %>%
+  count(LTgroup)
+
+Hebgrowth %>% group_by(compptile_lev) %>%
+  count(LTgroup)
+
+Hebgrowth %>% group_by(adm) %>%
+  count(compptile_lev25)
+
+Hebgrowth %>% group_by(compptile_lev25) %>%
+  count(LTgroup)
+
+
+```
+#Descriptives of mean vocabulary by age and group
+```{r}
+
+Hebgrowth_desc <- Hebgrowth %>% group_by(LTgroup, AGE) %>%
+  dplyr::summarize(
+    n = n(),
+    TotProd = mean(prod),
+    SD = sd(prod),
+    Minimum = min(prod),
+    Maximum = max(prod)
+  )
+
+
+knitr::kable(
+ Hebgrowth_desc,
+  caption = "Table 2. Descriptive statistics for Words Produced by age and group.",
+  note = "Maximum score possible = 404",
+  digits = 1,
+  align = "lcccccc",
+  escape = TRUE
+)
+
+
+```
+#Descriptives of prod and comp percentile by LT group
+```{r}
+
+Hebgrowth_desc_prodptile <- Hebgrowth %>% group_by(LTgroup, adm) %>%
+  dplyr::summarize(
+    n = n(),
+    TotProdper = mean(prod_centile_rank),
+    SD_prodp = sd(prod_centile_rank),
+    Min_prodp = min(prod_centile_rank),
+    Max_prodp = max(prod_centile_rank),
+    TotCompper = mean(comp_centile_rank),
+    SD_compp = SD(comp_centile_rank),
+    Min_compp = min(comp_centile_rank),
+    Max_compp = max(comp_centile_rank)
+  )
+
+knitr::kable(
+ Hebgrowth_desc_prodptile,
+  caption = "Descriptive statistics for Production and Comprehension Percentile by adm and group.",
+  digits = 1,
+  align = "lcccccc",
+  escape = TRUE
+)
+
+
+Hebgrowth_prod_plot <- ggplot(Hebgrowth, mapping = aes(x = adm, y = prod_centile_rank, fill = LTgroup)) + geom_boxplot()
+
+Hebgrowth_prod_plot
+
+Hebgrowth_comp_plot <- ggplot(Hebgrowth, mapping = aes(x = adm, y = comp_centile_rank, fill = LTgroup)) + geom_boxplot()
+
+Hebgrowth_comp_plot
+
+```
+
+#cross-tabs of prod percentile levels
+```{r}
+
+Hebgrowth %>% filter(adm == "1") %>%
+  group_by(LTgroup, prod_centile_lev_adm2, prod_centile_lev_adm3) %>%
+  count()
+
+```
+
+##Descriptives of comp percentile scores by LTgroup - 25th percentile
+
+```{r}
+
+# checking to make sure that group 1 compptile_lev25 is correct for all admins
+
+Hebgrowth %>% group_by(adm) %>%
+  count(compptile_lev25)
+
+# looking at compptile group by LT group
+
+Hebgrowth %>% group_by(LTgroup, adm) %>%
+  count(compptile_lev25)
+
+Hebgrowth_compptile25 <- Hebgrowth %>% group_by(compptile_lev25, adm) %>%
+  dplyr::summarize(
+    n = n(),
+    Compptile = mean(comp_centile_rank),
+    SD = sd(comp_centile_rank),
+    Minimum = min(comp_centile_rank),
+    Maximum = max(comp_centile_rank)
+  )
+
+knitr::kable(
+ Hebgrowth_compptile25,
+  caption = "Table x. Descriptive statistics for Words Understood percentile by group.",
+  digits = 1,
+  align = "lcccccc",
+  escape = TRUE
+)
+
+```
+
+
+## Growth models with GAMLSS (rather than LMER) production over age
+```{r}
+
+# Note GAMLSS models are specifically using the "beta" distribution family, which means they are bounded by 0 and 1 (like a logistic)
+
+Hebgrowth$prod01 <- (Hebgrowth$prod+1)/428
+Hebgrowth_gam <- na.omit(Hebgrowth)
+
+#model 1 - age only
+
+gam_age <- gamlss(prod01 ~ pb(AGE, lambda = 10000),
+                  sigma.formula = ~pb(AGE),
+                  family = BE, 
+                  data = Hebgrowth_gam)
+
+#model 2 - age and group main effects
+
+gam_age_group <- gamlss(prod01 ~ pb(AGE, lambda = 10000) + LTgroup,
+                  sigma.formula = ~pb(AGE),
+                  family = BE, 
+                  data = Hebgrowth_gam)
+
+# model 3 - age and group main effects and interaction
+
+gam_age_group_int <- gamlss(prod01 ~ pb(AGE, lambda = 10000) * LTgroup,
+                  sigma.formula = ~pb(AGE),
+                  family = BE, 
+                  data = Hebgrowth_gam)
+
+## Get summaries of models
+
+summary(gam_age)
+summary(gam_age_group)
+summary(gam_age_group_int)
+
+```
+
+## Generate predicted values at 12, 18 and 24 months given the model
+```{r}
+
+predict(gam_age_group, newdata = data.frame(AGE= 12, LTgroup=c("LT", "TD")), type = "response", re.form = ~0)
+
+predict(gam_age_group, newdata = data.frame(AGE= 18, LTgroup=c("LT", "TD")), type = "response", re.form = ~0)
+
+predict(gam_age_group, newdata = data.frame(AGE= 24, LTgroup=c("LT", "TD")), type = "response", re.form = ~0)
+
+
+# Get AIC values
+
+AIC(gam_age)
+AIC(gam_age_group)
+AIC(gam_age_group_int)
+
+# Get BIC values
+
+BIC(gam_age)
+BIC(gam_age_group)
+BIC(gam_age_group_int)
+
+# Get Rsquared values
+
+Rsq(gam_age)
+Rsq(gam_age_group)
+Rsq(gam_age_group_int)
+
+# Compare models using liklihood ratio test
+
+LR.test(gam_age, gam_age_group)
+LR.test(gam_age_group, gam_age_group_int)
+
+
+```
+
+## Plot model results - main effects only model
+```{r}
+
+Hebgrowth_gam$fitted <- (predict(gam_age_group, type = "response" ) * 428)
+
+ggplot(Hebgrowth_gam, aes(y = fitted, x = AGE, linetype = LTgroup)) +
+  theme_bw() + 
+  theme(panel.grid = element_blank()) +
+  geom_line(size = 1.1) +
+  scale_color_manual(values=c("Black", "Grey")) +
+  geom_point(aes(y = prod, shape = LTgroup), show.legend = F) +
+  scale_shape_manual(values = c(16, 21)) +
+  theme(panel.grid = element_blank()) +
+  scale_x_continuous(breaks=seq(12,24,1)) +
+  ylim(0,440) +
+  labs(
+    x = "Age in months", 
+    y = "Words \n produced \n (modeled \n estimate)", linetype = "Group") +
+  theme(axis.title.y = element_text(angle = 0, vjust = 0.5)) +
+  theme(text = element_text(size = 16))
+  
+ggsave("G:/Shared drives/Lang Learning Lab Management/Staff Personal/Active Staff Personal/VMarchman/mypapers/HebrewCDI/Growth Paper/growthplot.jpg", height = 8, width = 11, units = "in", dpi = 300)
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+# model 4 - Add main effect of comp to age and group
+```{r}
+
+gam_age_comp_group_alt25 <- gamlss(prod01 ~ pb(AGE, lambda = 10000) + LTgroup + compptile_lev25,
+                  sigma.formula = ~pbm(AGE),
+                  family = BE, 
+                  data = Hebgrowth_gam)
+
+summary(gam_age_comp_group_alt25)
+
+```
+#models 5 and 6 - adding age x comp and group x comp interations and 3 way
+```{r}
+
+gam_age_comp_group_agecompint25 <- gamlss(prod01 ~ pb(AGE) + LTgroup + (pb(AGE) * compptile_lev25) + (LTgroup * compptile_lev25),
+                  sigma.formula = ~pb(AGE),
+                  family = BE, 
+                  data = Hebgrowth_gam)
+
+summary(gam_age_comp_group_agecompint25)
+
+## introducing 3-way interaction
+
+gam_age_comp_group_3way25 <- gamlss(prod01 ~ pb(AGE) + LTgroup + compptile_lev25 + (pb(AGE) * compptile_lev25) + (pb(AGE) * compptile_lev25 * LTgroup),
+                  sigma.formula = ~pbm(AGE),
+                  family = BE, 
+                  data = Hebgrowth_gam)
+
+summary(gam_age_comp_group_3way25)
+
+```
+# Get model fit values
+
+```{r}
+
+AIC(gam_age_comp_group_alt25)
+AIC(gam_age_comp_group_agecompint25)
+AIC(gam_age_comp_group_3way25)
+
+# Get BIC values
+
+BIC(gam_age_comp_group_alt25)
+BIC(gam_age_comp_group_agecompint25)
+BIC(gam_age_comp_group_3way25)
+
+# Get Rsquared values
+
+Rsq(gam_age_comp_group_alt25)
+Rsq(gam_age_comp_group_agecompint25)
+Rsq(gam_age_comp_group_3way25)
+
+# Compare models using liklihood ratio test
+
+LR.test(gam_age_group, gam_age_comp_group_alt25)
+LR.test(gam_age_comp_group_alt25, gam_age_comp_group_agecompint25)
+LR.test(gam_age_comp_group_agecompint25, gam_age_comp_group_3way25)
+
+```
+##plot final comprehension model - FINAL- 25th
+```{r}
+
+Hebgrowth_gam$fitted <- (predict(gam_age_comp_group_alt25, type = "response" ) * 428)
+
+ggplot(Hebgrowth_gam, aes(y = fitted, x = AGE, color = compptile_lev25, 
+  linetype = LTgroup)) +
+  theme_bw() + 
+  theme(panel.grid = element_blank()) +
+  geom_line(size = 1.3) +
+  geom_point(aes(y = prod, shape = LTgroup, color = compptile_lev25), show.legend = F) +
+  scale_linetype_manual(values = c("solid", "dotted")) +
+  scale_color_manual(values = c("black", "dark grey"), labels = c("High", "Low")) +
+  theme(panel.grid = element_blank()) +
+  scale_x_continuous(breaks=seq(12,24,1)) +
+  ylim(0,440) +
+  labs(
+    x = "Age in months", 
+    y = "Words \n produced \n (modeled \n estimate)", 
+    linetype = "Group", color = "Comprehension\nLevel") +
+  theme(axis.title.y = element_text(angle = 0, vjust = 0.5, size = 16)) +
+  theme(legend.title = element_text(size = 16))+
+  theme(text = element_text(size = 16))
+  
+ggsave("G:/Shared drives/Lang Learning Lab Management/Staff Personal/Active Staff Personal/VMarchman/mypapers/HebrewCDI/Growth Paper/growthplot_comp.jpg", height = 8, width = 11, units = "in", dpi = 300)
+```
+
+##predicting values - by LT group and comp level (25th)
+```{r}
+
+predict(gam_age_comp_group_alt25, newdata = data.frame(AGE= 18, LTgroup=c("LT"), compptile_lev25=c("high")), type = "response", re.form = ~0)
+
+predict(gam_age_comp_group_alt25, newdata = data.frame(AGE= 18, LTgroup=c("LT"), compptile_lev25=c("low")), type = "response", re.form = ~0)
+
+predict(gam_age_comp_group_alt25, newdata = data.frame(AGE= 18, LTgroup=c("TD"), compptile_lev25=c("high")), type = "response", re.form = ~0)
+
+predict(gam_age_comp_group_alt25, newdata = data.frame(AGE= 18, LTgroup=c("TD"), compptile_lev25=c("low")), type = "response", re.form = ~0)
+
+predict(gam_age_comp_group_alt25, newdata = data.frame(AGE= 24, LTgroup=c("LT"), compptile_lev25=c("high")), type = "response", re.form = ~0)
+
+predict(gam_age_comp_group_alt25, newdata = data.frame(AGE= 24, LTgroup=c("LT"), compptile_lev25=c("low")), type = "response", re.form = ~0)
+
+predict(gam_age_comp_group_alt25, newdata = data.frame(AGE= 24, LTgroup=c("TD"), compptile_lev25=c("high")), type = "response", re.form = ~0)
+
+predict(gam_age_comp_group_alt25, newdata = data.frame(AGE= 24, LTgroup=c("TD"), compptile_lev25=c("low")), type = "response", re.form = ~0)
+
+```
